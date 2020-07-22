@@ -9,8 +9,11 @@ output:
   pdf_document:
     fig_width: 10
     fig_height: 6
+    
 geometry: margin=2cm
-
+bibliography: references.bib
+biblio-style: "apalike"
+link-citations: true
 
 ---
 
@@ -18,6 +21,10 @@ geometry: margin=2cm
 #knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(e1071)
+library(beepr)
+library(caret)
+library(randomForest)
+library(ranger)
 ```
 
 # Problem 1
@@ -41,10 +48,44 @@ Test_Data <- Crude_Data[-(1:14628), ];
 
 
 ```{r SVM, cache=TRUE}
-SVM_Model <- svm(Y ~ ., data = Training_Data)
-#plot(SVM_Model, data = Training_Data, Y~.)
-SVM_Predict <- predict(object = SVM_Model, newdata = Test_Data[,-35]);
-table(Predicted = Test_Data[,35], True = SVM_Predict)
+# SVM_Model <- svm(Y ~ ., data = Training_Data)
+# #plot(SVM_Model, data = Training_Data, Y~.)
+# SVM_Predict <- predict(object = SVM_Model, newdata = Test_Data[,-35]);
+# table(Predicted = Test_Data[,35], True = SVM_Predict)
+# test <- tune.svm(Y ~ ., data = Training_Data, gamma = c(0.01, 0.1, 1), cost = 5, kernel = "radial")
+# beepr::beep(sound = 9)
 
+```
+
+# Random Forest
+
+According to @friedman2001elements and @james2013introduction, the usual number of predictors candidates $m$ from the full set of predictors $p$ is $$m  \approx  \sqrt{p}$$. So with our data, $m \approx \sqrt(35) \approx 6$.
+```{r Random Forest, cache=TRUE}
+tunegrid <- expand.grid(.mtry = c(15), .splitrule = c("gini", "extratrees"),
+                      .min.node.size = c(5))
+fitControl <- trainControl(method = "cv", number = 5, search = "grid", verboseIter = TRUE)
+modellist <- list()
+Start_Time <- Sys.time()
+for (ntree in c(1000, 2000)) {
+	set.seed(42)
+  cat(ntree)
+	fit <- train(Y ~ ., data = Training_Data,
+                             method = "ranger", trControl = fitControl,
+                             tuneGrid = tunegrid, num.trees = ntree,  
+                             )
+	key <- toString(ntree)
+	modellist[[key]] <- fit
+	running_time <- Sys.time() - Start_Time
+}
+# Random_Forest_Model <- train(Y ~ ., data = Training_Data,
+#                              method = "rf", trControl = fitControl,
+#                              tuneGrid = tunegrid
+#                              )
+
+# compare results
+results <- resamples(modellist)
+summary(results)
+dotplot(results)
+beepr::beep(sound = 9)
 ```
 
