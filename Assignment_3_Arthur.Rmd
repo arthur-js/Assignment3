@@ -1,0 +1,50 @@
+---
+title: "Assignment 3"
+author: "Arthur Junges Schmidt"
+date: "`r as.character(Sys.time(), '%d %B %Y')`"
+documentclass: article
+lang: eng
+classoption: a4paper
+output:
+  pdf_document:
+    fig_width: 10
+    fig_height: 6
+geometry: margin=2cm
+
+
+---
+
+```{r setup, include=FALSE}
+#knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(e1071)
+```
+
+# Problem 1
+(a) The file ps3-1.csv contains a data set with 34 features (x1, x2, … x34) and 1 target variable
+(Y). Estimate a classifier model using Support Vector Machine and Random Forest algorithm in
+R, respectively, with the first 14628 rows of the data. Optimize your model so that a False
+Positive Rate is less than 10% for Y = 0 (actual Y = 1 cases falsely classified as Y = 0).
+Particularly, you are required to review relevant literature, use the k-fold cross-validation method
+to train the Random Forest model. Use grid search to find hyper-parameter setting: the best
+number of trees and features, maximum leaf nodes. Assess importance of each feature based on
+two criteria: Mean Decrease Accuracy and Mean Decrease Gini.
+Compare two estimation methods with confusion matrices
+
+```{r Data reading, message=FALSE}
+Crude_Data <- read.csv("ps3-1.csv");
+Crude_Data <- Crude_Data[,-1];
+Crude_Data$Y <- factor(Crude_Data$Y, levels = c(0,1));
+Training_Data <- Crude_Data[1:14628, ];
+Test_Data <- Crude_Data[-(1:14628), ];
+```
+
+
+```{r SVM, cache=TRUE}
+SVM_Model <- svm(Y ~ ., data = Training_Data)
+#plot(SVM_Model, data = Training_Data, Y~.)
+SVM_Predict <- predict(object = SVM_Model, newdata = Test_Data[,-35]);
+table(Predicted = Test_Data[,35], True = SVM_Predict)
+
+```
+
