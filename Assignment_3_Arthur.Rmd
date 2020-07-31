@@ -2,19 +2,19 @@
 title: "Assignment 3"
 author: "Arthur Junges Schmidt"
 date: "`r as.character(Sys.time(), '%d %B %Y')`"
-documentclass: article
-lang: eng
-classoption: a4paper
 output:
+  html_document:
+    df_print: paged
   pdf_document:
     fig_width: 10
     fig_height: 6
-    
+lang: eng
+classoption: a4paper
+documentclass: article
 geometry: margin=2cm
 bibliography: references.bib
-biblio-style: "apalike"
-link-citations: true
-
+biblio-style: apalike
+link-citations: yes
 ---
 
 ```{r setup, include=FALSE}
