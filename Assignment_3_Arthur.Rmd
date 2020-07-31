@@ -25,10 +25,16 @@ library(beepr)
 library(caret)
 library(randomForest)
 library(ranger)
+library(doParallel)
+library(kernlab)
+
+
 ```
 
 # Problem 1
-(a) The file ps3-1.csv contains a data set with 34 features (x1, x2, … x34) and 1 target variable
+## a)
+
+The file ps3-1.csv contains a data set with 34 features (x1, x2, … x34) and 1 target variable
 (Y). Estimate a classifier model using Support Vector Machine and Random Forest algorithm in
 R, respectively, with the first 14628 rows of the data. Optimize your model so that a False
 Positive Rate is less than 10% for Y = 0 (actual Y = 1 cases falsely classified as Y = 0).
@@ -46,46 +52,320 @@ Training_Data <- Crude_Data[1:14628, ];
 Test_Data <- Crude_Data[-(1:14628), ];
 ```
 
+### SVM
 
-```{r SVM, cache=TRUE}
-# SVM_Model <- svm(Y ~ ., data = Training_Data)
-# #plot(SVM_Model, data = Training_Data, Y~.)
-# SVM_Predict <- predict(object = SVM_Model, newdata = Test_Data[,-35]);
-# table(Predicted = Test_Data[,35], True = SVM_Predict)
-# test <- tune.svm(Y ~ ., data = Training_Data, gamma = c(0.01, 0.1, 1), cost = 5, kernel = "radial")
-# beepr::beep(sound = 9)
+Firstly, a cluster with 3 processors is created. The library randomForest is loaded for the future runs of the random forest models. 
 
+Radial SVM were tried but didn't present better accuracy values while taking much longer to finish. For the linear SVM models, only the cost parameter is tuned. For cost values greater than 10, the models take an enormous amount of time to run. Because of this, the cost values tested are `r 10^(-4:1)`.
+
+```{r SVM, cache=TRUE, size='tiny'}
+###### Cluster creation for usage of 4 processor cores
+
+cluster <- makeCluster(3, outfile = "cluster_log.txt")
+clusterEvalQ(cluster, library(randomForest))
+registerDoParallel(cluster)
+
+
+SVM_tunegrid <- expand.grid(C = 10^(-4:1))
+SVM_trControl <-  trainControl("cv", number = 10,
+                               verboseIter = TRUE)
+
+Start_Time1 <- Sys.time()
+
+SVM_Fit <- train(Y ~ ., data = Training_Data,
+                 method = 'svmLinear', tuneGrid = SVM_tunegrid,
+                 preProcess = c("center", "scale"),
+                 trControl = SVM_trControl
+                 )
+End_time1 <- Sys.time()
+End_time1 - Start_Time1
+beep(sound = 3)
+SVM_Fit
+plot(SVM_Fit)
+
+# stopCluster(cluster)
 ```
 
-# Random Forest
+```{r}
+confusionMatrix(SVM_Fit)
 
-According to @friedman2001elements and @james2013introduction, the usual number of predictors candidates $m$ from the full set of predictors $p$ is $$m  \approx  \sqrt{p}$$. So with our data, $m \approx \sqrt(35) \approx 6$.
-```{r Random Forest, cache=TRUE}
-tunegrid <- expand.grid(.mtry = c(15), .splitrule = c("gini", "extratrees"),
-                      .min.node.size = c(5))
-fitControl <- trainControl(method = "cv", number = 5, search = "grid", verboseIter = TRUE)
-modellist <- list()
-Start_Time <- Sys.time()
-for (ntree in c(1000, 2000)) {
-	set.seed(42)
-  cat(ntree)
-	fit <- train(Y ~ ., data = Training_Data,
-                             method = "ranger", trControl = fitControl,
-                             tuneGrid = tunegrid, num.trees = ntree,  
-                             )
-	key <- toString(ntree)
-	modellist[[key]] <- fit
-	running_time <- Sys.time() - Start_Time
+confusionMatrix(SVM_Fit, scale = FALSE, norm = "none")
+```
+
+The False positive rate for the SVM model is:
+$$\frac{274}{274+11061}= `r 1.8/(1.8+75.6)`$$
+
+### Random Forest
+
+According to @friedman2001elements and @james2013introduction, the usual number of predictors candidates $m$ from the full set of predictors $p$ is: $$m  \approx  \sqrt{p}$$ So with our data, $m \approx \sqrt(35) \approx 6$.
+
+Very conveniently, the Caret package in R enables the user to modify the 'train' function with more options for parameter tuning. Originally, the only parameter accepted for tuning is 'mtry'. However, with the code below, the 'ntre' (number of trees) and 'maxnode' (maximum number of leaves) are added as tunable parameter. Additionally, these parameters are easily compared with the plot function after the training process. The time to train the random forest model with a wide grid of paramenters is very long. After many trials, these parameters in the code below showed the best results. If a wider range of values would have been used, the training process would take longer than 2 hours.
+
+Cross validation is used, with the method "cv" on the traincontrol parameters. 10 folds of the data were used.
+
+\small
+
+```{r Random Forest, cache=TRUE, size='scriptsize'}
+customRF <- list(type = "Classification",
+                 library = "randomForest",
+                 loop = NULL)
+
+customRF$parameters <- data.frame(parameter = c("mtry", "ntree", "maxnodes"),
+                                  class = rep("numeric", 3),
+                                  label = c("mtry", "ntree", "maxnodes"))
+
+customRF$grid <- function(x, y, len = NULL, search = "grid") {}
+
+customRF$fit <- function(x, y, wts, param, lev, last, weights, classProbs) {
+  randomForest(x, y,
+               mtry = param$mtry,
+               ntree=param$ntree,
+               maxnodes = param$maxnodes)
 }
-# Random_Forest_Model <- train(Y ~ ., data = Training_Data,
-#                              method = "rf", trControl = fitControl,
-#                              tuneGrid = tunegrid
-#                              )
+# customRF$varImp = randomForest::importance()
 
-# compare results
-results <- resamples(modellist)
-summary(results)
-dotplot(results)
-beepr::beep(sound = 9)
+
+#Predict label
+customRF$predict <- function(modelFit, newdata, preProc = NULL, submodels = NULL)
+   predict(modelFit, newdata)
+
+#Predict prob
+customRF$prob <- function(modelFit, newdata, preProc = NULL, submodels = NULL)
+   predict(modelFit, newdata, type = "prob")
+
+customRF$sort <- function(x) x[order(x[,1]),]
+customRF$levels <- function(x) x$classes
+###### Cluster creation for usage of 4 processor cores
+
+# cluster <- makeCluster(4, outfile = "cluster_log.txt")
+
+# registerDoParallel(cluster)
+
+######
+control <- trainControl(method="cv", 
+                        number=10, 
+                        allowParallel = TRUE,
+                        verboseIter = TRUE
+                        )
+
+tunegrid <- expand.grid(.mtry=c(6, 12, 18),.ntree=c(100, 200, 500, 1000), 
+                        .maxnodes= seq(40, 80, by = 10))
+
+set.seed(123)
+Start_Time <- Sys.time()
+RF_fit <- train(Y ~ ., data=Training_Data, 
+                method=customRF, 
+                metric="Accuracy", 
+                tuneGrid=tunegrid, 
+                trControl=control,
+                preProcess = c("center", "scale"))
+
+RF_fit
+beepr::beep(sound = 3)
+End_time <- Sys.time()
+End_time - Start_Time
+stopCluster(cluster)
+plot(RF_fit)
+```
+\normalsize
+It can be seen that after a tree size of 500, there's no real improvement in the model. On the contrary, the model with a $ntree = 1000$ has a lower accuracy. 
+
+For the False Negative Rate, the confusion matrix is needed. The confusion matrix is made from the best model found with the combination of the parameters. The results shown below represent the average percentage across the 10 folds.
+\small
+
+```{r, size='scriptsize'}
+confusionMatrix.train(RF_fit, scale = FALSE)
+
 ```
 
+\normalsize
+
+For the absolute number of predictions on the confusion matrix:
+\small
+
+```{r, size="scriptsize"}
+confusionMatrix(RF_fit, scale = FALSE, norm = "none")
+```
+\normalsize
+
+For the False Negative Rate:
+$$\frac{352}{352+10983}= `r 391/(391+10944)`$$ which is lower than 10%.
+
+
+A problem on this custom model approach is that the function 'importance()' which returns the mean decrease accuracy and mean decrease Gini values for the variables only returns the latter. To fix this, the best model created from all the parameters is then performed on the standard 'randomForest' function, which will then return both values needed. The best tree found has the following parameters:
+
+* mtry: `r RF_fit$bestTune$mtry`
+* ntree: `r RF_fit$bestTune$ntree`
+* maxnodes: `r RF_fit$bestTune$maxnodes`
+
+
+\small 
+
+```{r Best model performed again with randomForest function, size="scriptsize", cache=TRUE}
+
+Final_Model_RF <- randomForest::randomForest(Y ~ ., data = Training_Data,
+                               importance = TRUE,
+                               maxnodes = RF_fit$bestTune$maxnodes,
+                               ntree = RF_fit$bestTune$ntree,
+                               mtry = RF_fit$bestTune$mtry,
+                               )
+
+randomForest::importance(Final_Model_RF)
+varImpPlot(Final_Model_RF)
+```
+
+\normalsize
+
+```{r Comparing models}
+Both_models <- resamples(list(SVM = SVM_Fit,
+                              RandomForest = RF_fit))
+
+summary(Both_models)
+xyplot(Both_models)
+
+
+```
+
+
+
+
+## b)
+
+Use two estimated models to predict the last 200 rows of the data and compare prediction
+with the observed target value (Y).
+
+```{r}
+Predictions <- predict(list(SVM = SVM_Fit,
+                            RandomForest = RF_fit), 
+                       newdata = Test_Data[, -35])
+
+confusionMatrix(data = Predictions$SVM, reference = Test_Data[, 35])
+confusionMatrix(data = Predictions$RandomForest, reference = Test_Data[, 35])
+
+plot(Predictions$SVM, Test_Data[, 35])
+plot(Predictions$RandomForest, Test_Data[, 35])
+
+```
+
+
+
+
+
+
+
+\newpage
+# Problem 2
+The file ps3-2.csv contains a data set with the coordinates in degrees (longitude/latitude) of the
+start and end points of the trips. Each row represents a trip. Use a clustering method in R to
+divide the start and end points into clusters respectively. The criterion used for clustering is that
+the maximum distance between the points in each cluster is less than 0.03. Treat a cluster of start
+points as an origin for a trip, and a cluster of end points as a destination for a trip. Construct an
+O-D matrix to indicate the number of trips between origins and destinations. Your report must
+include description of the approach used for clustering, the code, and the results.
+
+```{r Libraries EX2, include=FALSE}
+library(sp)
+library(rgdal)
+library(geosphere)
+```
+
+
+
+```{r Data Processing, message=FALSE}
+EX2_Crude_Data <- read_csv("ps3-2.csv")
+
+Start_Coord <- EX2_Crude_Data[, 1:2]
+End_Coord <- EX2_Crude_Data[, 3:4]
+
+```
+
+A distance of $1^{\circ}$ converted to kilometer is equivalent to around 111.3 km. Consequently, the equivalent distance of $0.03^{\circ}$ is $\approx`r 0.03*111.3`$, or $\approx`r 0.03*111.3*1000`$. The distGeo function calculates the Geodesic distances in meters.
+
+The approach used to cluster the data involves calculating the geodesic distance between the coordinates and then applying a clustering function, cutting off the trees smaller than 3340 meters. This results that the points within the clusters are within that distance.
+```{r Clustering Start Coordinates, cache=TRUE}
+Start_Coord_Dist <- distm(cbind(Start_Coord$`Longitude - Start (deg)`,
+                            Start_Coord$`Latitude - Start (deg)`), 
+                          fun = distGeo)
+
+Start_Coord_Cluster <- hclust(as.dist(Start_Coord_Dist), method = "complete")
+Start_Coord$Cluster <- cutree(Start_Coord_Cluster, h = 3340)
+
+plot(x = Start_Coord$`Longitude - Start (deg)`,
+     y = Start_Coord$`Latitude - Start (deg)`,
+     col=factor(Start_Coord$Cluster), pch = 3,
+        box(col="black"),
+        main = "Clustering",
+        xlab = "Longitude",
+        ylab = "Latitude")
+          legend("topright", legend=paste("Cluster", unique(Start_Coord$Cluster), sep=""),
+                     col=grDevices::colors()[unique(Start_Coord$Cluster)],
+                 pch=3, bg="white", bty = "n",
+                 ncol = 3, cex = 0.7, y.intersp=0.7,x.intersp=0.3)
+```
+
+
+
+```{r Clustering End Coordinates, cache=TRUE}
+End_Coord_Dist <- distm(cbind(End_Coord$`Longitude - End (deg)`,
+                            End_Coord$`Latitude - End (deg)`), 
+                          fun = distGeo)
+
+End_Coord_Cluster <- hclust(as.dist(End_Coord_Dist), method = "complete")
+End_Coord$Cluster <- cutree(End_Coord_Cluster, h = 3340)
+
+plot(x = End_Coord$`Longitude - End (deg)`,
+     y = End_Coord$`Latitude - End (deg)`,
+     col=factor(End_Coord$Cluster), pch = 3,
+        box(col="black"),
+        main = "Clustering",
+        xlab = "Longitude",
+        ylab = "Latitude")
+          legend("topright", legend=paste("Cluster", unique(End_Coord$Cluster), sep=""),
+                     col=grDevices::colors()[unique(End_Coord$Cluster)],
+                 pch=3, bg="white", bty = "n",
+                 ncol = 3, cex = 0.7, y.intersp=0.7,x.intersp=0.3)
+```
+
+
+\footnotesize 
+```{r Creating the OD Matrix, R.options=list(width = 110)}
+Start_End_Movements <- data.frame(Origin = Start_Coord$Cluster, Destination = End_Coord$Cluster)
+Start_End_Movements <- table(Start_End_Movements$Origin,
+                             Start_End_Movements$Destination,
+                             dnn = c("Origin", "Destination"))
+
+print(Start_End_Movements)
+
+```
+
+\normalsize
+
+\newpage
+# Problem 3
+```{r Import Data}
+Ex3_Crude_Data <- read_csv("ps3-1.csv")
+Ex3_Crude_Data <- Ex3_Crude_Data[, -c(1, 36)] #Deleting the first and Y collumns
+```
+
+The PCA is performed with the prcomp function. The data is centered (making the mean of each variable zero) and scaled, so the variables also have an unitary variance. On summary of the PCA, it can be seen the cumulative percentage of the variable regarding the addition of components.
+
+```{r PCA and plotting, fig.height= 10}
+Ex3_PCA <- prcomp(x = Ex3_Crude_Data, center = TRUE, scale. = TRUE)
+summary(Ex3_PCA)
+
+
+plot(Ex3_PCA, type = "l", main = "Screeplot")
+
+plot(cumsum(Ex3_PCA$sdev^2 / sum(Ex3_PCA$sdev^2)), ylim=0:1,
+     ylab = "Cumulative variance, %", xlab = "Components")
+abline(h = 0.9, col = "red")
+text(y = cumsum(Ex3_PCA$sdev^2 / sum(Ex3_PCA$sdev^2)),x= 1:34, labels = 1:34,
+     pos = 1, offset = 1)
+text(y = .92, x = 5, "90% of the variance", col = "red")
+
+```
+Looking at the second plot, it can be seen that the 90% threshold of the variance is achieved with the 21st principal component. On the other hand, for a more *ad hoc* approach, @james2013introduction describes the elbow method. According to the authors, "This is done by eyeballing the scree plot, and looking for a point at which the proportion of variance explained by each subsequent principal component drops off". This would be achieved after the 5th or 6th principal component. 
+
+\newpage
+
+# References
